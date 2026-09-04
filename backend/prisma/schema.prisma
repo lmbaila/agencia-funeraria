@@ -1,0 +1,473 @@
+// Sistema de Gestão de Seguros Funerários - Agência Funerária Espírito Santo
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  AGENT
+  CLIENT
+}
+
+/// Áreas de acesso do dashboard administrativo que podem ser atribuídas a um agente.
+/// O ADMIN tem sempre acesso total, independentemente das permissões atribuídas.
+enum Permission {
+  VIEW_DASHBOARD
+  MANAGE_CLIENTS
+  MANAGE_DELINQUENCY
+  MANAGE_PAYMENTS
+  MANAGE_CLAIMS
+  DELETE_DEPENDENTS
+  EXTEND_CONTRACTS
+  TERMINATE_CONTRACTS
+}
+
+enum ClientStatus {
+  GRACE_PERIOD
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+  DECEASED
+}
+
+enum MaritalStatus {
+  SOLTEIRO
+  CASADO
+  DIVORCIADO
+  VIUVO
+  UNIAO_DE_FACTO
+}
+
+enum DocumentType {
+  BI
+  PASSAPORTE
+}
+
+enum PaymentFrequency {
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+}
+
+enum ContractStatus {
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+  CANCELLED
+  FULFILLED
+}
+
+enum ClaimBeneficiaryType {
+  CLIENT
+  DEPENDENT
+}
+
+enum ClaimStatus {
+  REQUESTED
+  REGISTERED
+  REJECTED
+  CANCELLED
+}
+
+enum ClaimSource {
+  STAFF
+  PUBLIC_REQUEST
+}
+
+enum InstallmentStatus {
+  PENDING
+  PAID
+  LATE
+  WAIVED
+}
+
+enum PaymentMethod {
+  MPESA
+  EMOLA
+  CASH
+  POS
+  BANK_TRANSFER
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentType {
+  MEMBERSHIP_FEE
+  INSTALLMENT
+}
+
+enum AddendumType {
+  INCLUDE_DEPENDENT
+  EXCLUDE_DEPENDENT
+  PLAN_CHANGE
+  DURATION_EXTENSION
+  FREQUENCY_CHANGE
+  OTHER
+}
+
+model User {
+  id                 String       @id @default(uuid())
+  identifier         String       @unique
+  /// Nome próprio e apelido de administradores/agentes — usados nos documentos impressos por
+  /// eles em vez do identificador de login. Clientes têm o nome no seu próprio registo (Client).
+  firstName          String?
+  lastName           String?
+  passwordHash       String
+  role               Role         @default(CLIENT)
+  permissions        Permission[] @default([])
+  mustChangePassword Boolean      @default(true)
+  active             Boolean      @default(true)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  lastLoginAt        DateTime?
+
+  client Client?
+
+  @@map("users")
+}
+
+model Client {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  clientCode   String @unique
+  firstName    String
+  lastName     String
+  fullName     String
+  nationality  String
+  placeOfBirth String
+
+  maritalStatus         MaritalStatus?
+  documentType          DocumentType   @default(BI)
+  documentNumber        String         @unique
+  issueDate             DateTime?
+  expiryDate            DateTime?
+  birthDate             DateTime?
+  documentImagePath     String?
+  documentImageMimeType String?
+
+  phone            String
+  alternativePhone String?
+
+  province     String
+  district     String
+  neighborhood String
+  addressLine  String?
+  block        String?
+  houseNumber  String?
+
+  status ClientStatus @default(GRACE_PERIOD)
+
+  registeredByChannel String  @default("ONLINE") // ONLINE | AGENCY
+  registeredById      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dependents Dependent[]
+  contracts  Contract[]
+
+  @@map("clients")
+}
+
+model Dependent {
+  id       String @id @default(uuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  fullName       String
+  relationship   String
+  documentType   DocumentType?
+  documentNumber String?
+  birthDate      DateTime?
+
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  removedAt DateTime?
+
+  claims Claim[]
+
+  @@map("dependents")
+}
+
+model Plan {
+  id          String @id @default(uuid())
+  name        String @unique
+  displayName String
+
+  description    String?
+  urnDescription String?
+
+  coverageMin Decimal  @db.Decimal(12, 2)
+  coverageMax Decimal? @db.Decimal(12, 2)
+
+  monthlyFee    Decimal @db.Decimal(12, 2)
+  quarterlyFee  Decimal @db.Decimal(12, 2)
+  semiannualFee Decimal @db.Decimal(12, 2)
+  annualFee     Decimal @db.Decimal(12, 2)
+
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contracts Contract[]
+
+  @@map("plans")
+}
+
+model Contract {
+  id             String @id @default(uuid())
+  contractNumber String @unique
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   Plan   @relation(fields: [planId], references: [id])
+
+  paymentFrequency  PaymentFrequency @default(MONTHLY)
+  installmentAmount Decimal          @db.Decimal(12, 2)
+  durationMonths    Int              @default(12)
+
+  startDate DateTime  @default(now())
+  endDate   DateTime?
+
+  membershipFeeAmount Decimal   @db.Decimal(12, 2)
+  membershipFeePaid   Boolean   @default(false)
+  membershipFeePaidAt DateTime?
+
+  gracePeriodEnd DateTime?
+
+  status             ContractStatus @default(ACTIVE)
+  suspendedAt        DateTime?
+  suspensionDeadline DateTime?
+  terminatedAt       DateTime?
+  terminationReason  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payments      Payment[]
+  addendums     Addendum[]
+  installments  Installment[]
+  paymentLinks  PaymentLink[]
+  claims        Claim[]
+  notifications Notification[]
+
+  @@map("contracts")
+}
+
+model Installment {
+  id         String   @id @default(uuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  sequence       Int
+  dueDate        DateTime
+  monthReference String // "2026-08"
+
+  amount  Decimal @db.Decimal(12, 2)
+  lateFee Decimal @default(0) @db.Decimal(12, 2)
+
+  status InstallmentStatus @default(PENDING)
+  paidAt DateTime?
+
+  paymentId String?  @unique
+  payment   Payment? @relation(fields: [paymentId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  paymentLinks  PaymentLink[]
+  notifications Notification[]
+
+  @@unique([contractId, sequence])
+  @@map("installments")
+}
+
+/// Link de pagamento partilhável (ex: via SMS/WhatsApp) que permite ao cliente
+/// concluir o pagamento de uma mensalidade ou taxa de adesão via M-Pesa/e-Mola
+/// sem precisar de iniciar sessão no Portal do Cliente.
+model PaymentLink {
+  id    String @id @default(uuid())
+  token String @unique
+
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  installmentId String?
+  installment   Installment? @relation(fields: [installmentId], references: [id], onDelete: Cascade)
+
+  createdById String?
+  paymentId   String?
+
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@map("payment_links")
+}
+
+model Payment {
+  id         String   @id @default(uuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  type   PaymentType   @default(INSTALLMENT)
+  amount Decimal       @db.Decimal(12, 2)
+  method PaymentMethod
+  status PaymentStatus @default(PENDING)
+
+  reference      String? @unique
+  phoneUsed      String?
+  monthReference String?
+
+  registeredById String?
+  notes          String?
+
+  paidAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  installment Installment?
+
+  @@map("payments")
+}
+
+model Addendum {
+  id         String   @id @default(uuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  type        AddendumType
+  description String
+  createdBy   String?
+  createdAt   DateTime     @default(now())
+
+  /// Só preenchidos para DURATION_EXTENSION — permitem imprimir o aditivo com precisão
+  /// histórica mesmo que o contrato venha a ser prorrogado de novo mais tarde.
+  additionalMonths  Int?
+  newDurationMonths Int?
+
+  @@map("addendums")
+}
+
+/// Registo de sinistro — falecimento do titular ou de um dependente coberto pelo contrato.
+/// Quando o falecido é o titular, o contrato passa a FULFILLED (serviço prestado, sem mais
+/// cobranças). Quando é um dependente, só esse dependente é removido; o contrato continua.
+model Claim {
+  id         String   @id @default(uuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  beneficiaryType ClaimBeneficiaryType
+  dependentId     String?
+  dependent       Dependent?           @relation(fields: [dependentId], references: [id], onDelete: SetNull)
+
+  deceasedName String
+  dateOfDeath  DateTime
+  notes        String?
+
+  /// Certidão de óbito anexada (foto ou PDF), quando o titular/família a envia online ou o
+  /// agente a digitaliza no balcão. Opcional — muitas comunicações continuam a ser confirmadas
+  /// apenas com o documento físico apresentado presencialmente.
+  deathCertificatePath     String?
+  deathCertificateMimeType String?
+
+  status ClaimStatus @default(REGISTERED)
+  source ClaimSource @default(STAFF)
+
+  /// Agrupa vários pedidos submetidos em conjunto pela página pública (ex: titular comunica
+  /// o falecimento de dois dependentes na mesma comunicação) — usado para gerar um único
+  /// comprovativo com todos os nomes.
+  requestBatchId String?
+
+  /// Dados de quem submeteu a comunicação de óbito pela página pública (família/titular).
+  requesterName         String?
+  requesterPhone        String?
+  requesterRelationship String?
+
+  registeredById String?
+  confirmedAt    DateTime?
+
+  rejectedAt      DateTime?
+  rejectedById    String?
+  rejectionReason String?
+
+  cancelledAt   DateTime?
+  cancelledById String?
+  cancelReason  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("claims")
+}
+
+enum NotificationChannel {
+  SMS
+  WHATSAPP
+}
+
+/// Registo de lembretes de cobrança enviados ao cliente (simulado — sem gateway real de
+/// SMS/WhatsApp ligado). Serve como histórico de contactos feitos, quer manuais (accionados
+/// por um agente/admin) quer automáticos (accionados pela rotina diária de inadimplência).
+model Notification {
+  id         String   @id @default(uuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  installmentId String?
+  installment   Installment? @relation(fields: [installmentId], references: [id], onDelete: SetNull)
+
+  channel NotificationChannel
+  phone   String
+  message String
+
+  triggeredById String?
+
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}
+
+/// Parâmetros de negócio configuráveis pelo administrador (linha única, id fixo = 1).
+/// Substituem valores que antes estavam fixos no código da rotina de inadimplência.
+model SystemSettings {
+  id Int @id @default(1)
+
+  /// Juros de mora ao mês sobre mensalidades em atraso, ex: 0.02 = 2% (cláusula oitava).
+  lateFeeMonthlyRate Decimal @default(0.02) @db.Decimal(5, 4)
+
+  /// Nº de mensalidades em atraso a partir do qual o contrato é suspenso automaticamente.
+  suspensionThresholdInstallments Int @default(2)
+
+  /// Dias após a suspensão para rescisão automática, caso não haja regularização.
+  suspensionRegularizationDays Int @default(5)
+
+  /// Meses de carência após o pagamento da taxa de adesão, antes de haver direito à cobertura
+  /// (ex: activação de sinistros). 0 significa sem período de carência.
+  gracePeriodMonths Int @default(2)
+
+  /// Meses após o óbito do titular durante os quais ainda é possível comunicar/confirmar o
+  /// falecimento de um dependente coberto pelo mesmo contrato, mesmo já estando concluído.
+  postDeathClaimWindowMonths Int @default(6)
+
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+
+  @@map("system_settings")
+}
